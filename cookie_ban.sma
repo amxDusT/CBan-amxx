@@ -42,8 +42,8 @@ public plugin_init()
 
     // admin commands
     //register_concmd( "amx_ban", "CmdBan" );
-    register_concmd( "cookie_remove", "CookieRemove", ADMIN_FLAG, "< nick > - removes nick from cookie bans." );
-    register_concmd( "cookie_ban", "CmdCookieBan", ADMIN_FLAG, "< time > < nick | steamid | #id > < reason > - Bans with cookies." );
+    register_concmd( "amx_cremove", "CookieRemove", ADMIN_FLAG, "< nick >" );
+    register_concmd( "amx_cban", "CmdCookieBan", ADMIN_FLAG, "< time > < nick | steamid | #id > < reason >" );
 
     register_message( get_user_msgid( "MOTD" ), "MessageMotd" );
     
