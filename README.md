@@ -1,5 +1,5 @@
 # CookieBan-amxx
-# Not finished. Do NOT use it yet.
+
 A more efficient way to ban people ( through cookies ).
 
 
