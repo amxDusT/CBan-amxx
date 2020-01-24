@@ -36,9 +36,9 @@ new pServer;
 
 public plugin_init()
 {
-    register_plugin( "Cookie Bans", "2.2.2", "DusT" );
+    register_plugin( "CBans", "2.2.2", "DusT" );
 
-    register_cvar( "AmX_DusT", "Cookie_Ban_Default", FCVAR_SPONLY | FCVAR_SERVER );
+    register_cvar( "Cookie_Ban_Default", VERSION, FCVAR_SPONLY | FCVAR_SERVER );
 
     // admin commands
     //register_concmd( "amx_ban", "CmdBan" );
