@@ -1,7 +1,9 @@
 /*
     changelog:
         - added ini reader.
+        - added cfg reader.
         - moved cvars to ini
+        - no cookie word showing up
         - added a system to update player bans in case they avoid 
         - added ban command
         - added checking player when he joins if he has bans active
@@ -9,13 +11,23 @@
         - added screenshots ( to fix )
         - added screenshots on own plugin.
         - added amx_addban.
-        - added forward CBan_OnPlayerBannedPre/Post.
+        - added forward CBan_OnPlayerBannedPre/Post but not working.
+        - forwards work.
         - added offban
         - added forward Cban_OnAddBan
         - added forward CBan_onOffBan
-        - added unban
-        - native unban
-
+        
+        v1.0.5
+            - added banmenu
+            - added offbanmenu
+            - added reasons
+            - added bantimes
+            - added cbans_menu where you can write your reasons and your bantimes
+            - fixed banning showing like server did it instead of user
+            - added the max_offban_save when reading the ini ( before it was considering max = 0 )
+            - added native for banning with offban
+            - added native for banning with addban
+            
 */
 
 #include < amxmodx >
@@ -34,6 +46,9 @@
 #endif
 
 new Handle:hTuple;
+
+new g_ReasonsMenu;
+new g_BanTimesMenu;
 
 enum _:eUpdateBits
 {
@@ -76,6 +91,13 @@ new iExpired;
 new iBanType;
 new iAddBanType, iOffBanType;
 
+new g_IsBanning[ MAX_PLAYERS + 1 ];
+new g_isBanningReason[ MAX_PLAYERS + 1 ][ MAX_REASON_LENGTH ];
+new g_isBanningTime[ MAX_PLAYERS + 1 ];
+new g_ReasonBanTimes[ MAX_REASONS ];
+new bIsOffBan;
+new bIsUsingCustomTime;
+
 new fwPlayerBannedPre, fwPlayerBannedPost;
 new fwAddBan;
 new fwOffBan;
@@ -88,9 +110,13 @@ public plugin_init()
     register_concmd( "amx_unban", "CmdUnban", ADMIN_FLAG_UNBAN, "< nick | ip | steamid > - removes ban from CBans database." );
     register_concmd( "amx_ban", "CmdBan", ADMIN_FLAG_BAN, "< time > < nick | steamid | #id > < reason > - Bans player." );
     register_concmd( "amx_offban", "CmdOffBan", ADMIN_FLAG_OFFBAN, "< time > < nick > < reason > - Offline ban. Bans player that was ingame earlier." );
-    register_clcmd( "amx_offbanmenu", "CmdOffBanMenu", ADMIN_FLAG_OFFBAN );
     register_concmd( "amx_addban", "CmdAddBan", ADMIN_FLAG_ADDBAN, "< time > < steamid | ip > < reason > - Adds a ban to a player that is not ingame" );
     
+    register_clcmd( "amx_offbanmenu", "CmdOffBanMenu", ADMIN_FLAG_OFFBAN );
+    register_clcmd( "amx_banmenu", "CmdBanMenu", ADMIN_FLAG_BAN );
+    register_clcmd( "_reason_", "CmdReason" );
+    register_clcmd( "_ban_length_", "CmdBanLength" );
+
     fwPlayerBannedPre =  CreateMultiForward( "CBan_OnPlayerBannedPre", ET_CONTINUE, FP_CELL, FP_CELL, FP_VAL_BYREF, FP_STRING );
     fwPlayerBannedPost = CreateMultiForward( "CBan_OnPlayerBannedPost", ET_IGNORE, FP_CELL, FP_CELL, FP_CELL, FP_STRING );
     fwAddBan = CreateMultiForward( "CBan_OnAddBan", ET_CONTINUE, FP_STRING, FP_CELL, FP_VAL_BYREF, FP_STRING );
@@ -106,10 +132,13 @@ public plugin_natives()
 {
     register_native( "CBan_BanPlayer", "_CBan_BanPlayer" );
     register_native( "CBan_UnbanPlayer", "_CBan_UnbanPlayer" );
+    register_native( "CBan_OffBanPlayer", "_CBan_OffBanPlayer" );
+    register_native( "CBan_AddBanPlayer", "_CBan_AddBanPlayer" );
 }
 public plugin_cfg()
 {
     ReadINI();
+    ReadAndMakeMenus();
     set_task( 0.1, "SQL_Init" );
     hOffBanData = ArrayCreate( MAX_STEAMID_LENGTH + MAX_IP_LENGTH + MAX_CSIZE + 3, 1 );
     hOffBanName = ArrayCreate( MAX_NAME_LENGTH, 1 );
@@ -190,10 +219,87 @@ ReadINI()
             iAddBanType = str_to_num( szValue );
         else if( equal( szToken, "OFFBAN_TYPE" ) )
             iOffBanType = str_to_num( szValue );
+        else if( equal( szToken, "MAX_OFFBAN_SAVE" ) )
+            g_MaxOffBan = str_to_num( szValue );
     }
     fclose( fp );
 
     hTuple = SQL_MakeDbTuple( host, user, password, db );
+}
+
+ReadAndMakeMenus()
+{
+    new szDir[ 128 ];
+    get_configsdir( szDir, charsmax( szDir ) );
+
+    add( szDir, charsmax( szDir ), "/CBans_Menu.ini" );
+    if( !file_exists( szDir ) )
+    {
+        set_fail_state( "Couldn't load CBans_Menu.ini from configs folder." );
+        return;
+    }
+
+    new fp = fopen( szDir, "rt" );
+    new szData[ 180 ], szToken[ MAX_REASON_LENGTH ], szValue[ 10 ];
+
+    new bool:isReadingBans = false;
+    new reasons[ MAX_REASONS ][ MAX_REASON_LENGTH ];
+    new iBanTimes[ MAX_BANTIMES ];
+    new iPosReason, iPosBanTimes;
+    while( fgets( fp, szData, charsmax( szData ) ) )
+    {
+        if( szData[ 0 ] == '/' && szData[ 1 ] == '/' )
+            continue;
+        if( szData[ 0 ] == ';' )
+            continue;
+        trim( szData );
+        if( !szData[ 0 ] )
+            continue;
+        
+        if( szData[ 0 ] == '[' && szData[ strlen( szData ) - 1 ] == ']' )
+        {
+            if( equali( szData, "[REASON]" ) )
+                isReadingBans = false;
+            else if( equali( szData, "[BANTIMES]" ) )
+                isReadingBans = true; 
+            
+            continue;
+        }
+
+        strtok2( szData, szToken, charsmax( szToken ), szValue, charsmax( szValue ), '=' );
+        trim( szValue );
+        trim( szToken );
+
+        if( isReadingBans )
+        {
+            iBanTimes[ iPosBanTimes++ ] = str_to_num( szToken );
+        }
+        else
+        {
+            copy( reasons[ iPosReason ], MAX_REASON_LENGTH - 1, szToken );
+            g_ReasonBanTimes[ iPosReason++ ] = str_to_num( szValue );
+        }
+    }
+    fclose( fp );
+
+    g_ReasonsMenu = menu_create( "Reason", "ReasonHandler" );
+    menu_additem( g_ReasonsMenu, "Custom" );
+    
+    for( new i; i < iPosReason; i++ )
+        menu_additem( g_ReasonsMenu, reasons[ i ] );
+    
+    g_BanTimesMenu = menu_create( "Ban Length", "BanLengthHandler" );
+    menu_additem( g_BanTimesMenu, "Custom" );
+
+    for( new i; i < iPosBanTimes; i++ )
+    {
+        if( iBanTimes[ i ] == 0 )
+            menu_additem( g_BanTimesMenu, "Permanent" );
+        else
+            menu_additem( g_BanTimesMenu, fmt( "%d", iBanTimes[ i ] ) );
+    }
+        
+
 }
 
 public SQL_Init()
@@ -267,7 +373,6 @@ public client_disconnected( id )
     
     if( !g_PlayerCode[ id ][ 0 ] )
         return;
-
     new name[ MAX_NAME_LENGTH ];
     get_user_name( id, name, charsmax( name ) );
     //strtolower( name );
@@ -714,7 +819,7 @@ BanPlayer( id, pid, ban_length, ban_reason[]  )
         console_print( pid, "[CBAN] %L %s.", pid, "MSG_COMPLAIN", g_ComplainUrl );
         console_print( pid, "[CBAN] ===============================================" );
 
-        client_print_color( 0, print_team_red, "^4[CBAN]^1 Admin ^4%s^1 Banned: ^3%n^1 Reason: ^3%s^1 Time: ^3%s^1", id==0? nick:"SERVER", pid, ban_reason, ban_length==0? "Permanent":szTimeLeft );
+        client_print_color( 0, print_team_red, "^4[CBAN]^1 Admin ^4%s^1 Banned: ^3%n^1 Reason: ^3%s^1 Time: ^3%s^1", id>0? nick:"SERVER", pid, ban_reason, ban_length==0? "Permanent":szTimeLeft );
         
         ExecuteForward( fwPlayerBannedPost, _, pid, id, ban_length, ban_reason );
 
@@ -757,14 +862,12 @@ public CmdAddBan( id, level, cid )
     read_argv( 2, target, charsmax( target ) );
 
     new args[ 160 ], ban_reason[ MAX_REASON_LENGTH ];
-
     read_args( args, charsmax( args ) );
     remove_quotes( args ); trim( args );
 
     new iReasonPos = containi( args, target );
     iReasonPos += strlen( target ) + 1;
     copy( ban_reason, charsmax( ban_reason ), args[ iReasonPos ] );
-    add( ban_reason, charsmax( ban_reason ), " [ADDBAN]" );
     new pid = find_player( "cl", target );
 
     if( !pid )
@@ -779,6 +882,12 @@ public CmdAddBan( id, level, cid )
         return PLUGIN_HANDLED;
     }
 
+    AddBanPlayer( id, target, ban_length, ban_reason );
+    return PLUGIN_HANDLED;
+}
+
+AddBanPlayer( admin, target[], ban_length, ban_reason[ MAX_REASON_LENGTH ] )
+{
     static Regex:pPattern;
     if( !pPattern )
         pPattern = regex_compile( "^^(\d{1,3}\.){3}\d{1,3}$" );
@@ -791,14 +900,16 @@ public CmdAddBan( id, level, cid )
         szBanType[ 0 ] = 'S';
     else
     {
-        console_print( id, "Invalid argument. Must be IP or steamid." );
-        return PLUGIN_HANDLED;
+        console_print( admin, "Invalid argument. Must be IP or steamid." );
+        return;
     }
 
+    add( ban_reason, charsmax( ban_reason ), " [ADDBAN]" );
+
     new returnType;
-    ExecuteForward( fwAddBan, returnType, target, id, ban_length, ban_reason );
+    ExecuteForward( fwAddBan, returnType, target, admin, ban_length, ban_reason );
     if( returnType == PLUGIN_HANDLED )
-        return PLUGIN_HANDLED;
+        return;
 
     new admin_ip[ MAX_IP_LENGTH ], admin_id[ MAX_STEAMID_LENGTH ], admin_nick[ MAX_NAME_LENGTH * 2 ];
     new targetEsc[ 64 ];
@@ -806,12 +917,12 @@ public CmdAddBan( id, level, cid )
     
     SQL_QuoteString( Empty_Handle, targetEsc, charsmax( targetEsc ), target );
     new bool:bIsId = false;
-    if( id && is_user_connected( id ) )
+    if( admin && is_user_connected( admin ) )
     {
         bIsId = true;
-        get_user_ip( id, admin_ip, charsmax( admin_ip ), 1 );
-        get_user_authid( id, admin_id, charsmax( admin_id ) );
-        SQL_QuoteStringFmt( Empty_Handle, admin_nick, charsmax( admin_nick ), "%n", id );
+        get_user_ip( admin, admin_ip, charsmax( admin_ip ), 1 );
+        get_user_authid( admin, admin_id, charsmax( admin_id ) );
+        SQL_QuoteStringFmt( Empty_Handle, admin_nick, charsmax( admin_nick ), "%n", admin );
     }
     else 
     {
@@ -824,7 +935,6 @@ public CmdAddBan( id, level, cid )
                                         0,'',1);", g_BanTable, targetEsc, targetEsc, admin_ip, admin_id, bIsId==false? g_ServerNameEsc:admin_nick, szBanType,
                                         ban_reason, get_systime(), ban_length, g_ServerIPWithoutPort, g_ServerNameEsc );
     SQL_ThreadQuery( hTuple, "IgnoreHandle", query );
-    return PLUGIN_HANDLED;
 }
 
 public CmdOffBan( id, level, cid )
@@ -839,6 +949,7 @@ public CmdOffBan( id, level, cid )
     read_argv( 2, target, charsmax( target ) );
 
     new pid = find_player( "bl", target );
+    new bool:isInGame = true;
     if( pid && ( get_user_flags( pid ) & ADMIN_FLAG_IMMUNITY ) )
     {
         console_print( id, "Player has immunity" );
@@ -846,6 +957,7 @@ public CmdOffBan( id, level, cid )
     }
     if( !pid )
     {
+        isInGame = false;
         pid = ArrayFindStringContaini( hOffBanName, target );
         if( pid == -1 )
         {
@@ -863,14 +975,200 @@ public CmdOffBan( id, level, cid )
     iReasonPos += strlen( target ) + 1;
     copy( ban_reason, charsmax( ban_reason ), args[ iReasonPos ] );
     
-    BanPlayer( id, pid? pid:-pid, ban_length, ban_reason );
+    BanPlayer( id, isInGame? pid:-pid, ban_length, ban_reason );
+    return PLUGIN_HANDLED;
+}
+public CmdBanMenu( id, level, cid )
+{
+    if( cmd_access( id, level, cid, 0 ) )
+    {
+        clear_bit( bIsUsingCustomTime, id );
+        clear_bit( bIsOffBan, id );
+        g_IsBanning[ id ] = 0;
+        g_isBanningTime[ id ] = 0;
+        g_isBanningReason[ id ][ 0 ] = 0;
+        OpenMainMenu( id );
+    }
+    return PLUGIN_HANDLED;
+}
+
+OpenMainMenu( id )
+{
+    new menuid = menu_create( "Ban Menu", "MainMenuHandler" );
+
+    new players[ 32 ], num;
+    get_players( players, num );
+
+    new buff[ 2 ];
+    for( new i; i < num; i++ )
+    {
+        buff[ 0 ] = get_user_userid( players[ i ] ); buff[ 1 ] = 0;
+        menu_additem( menuid, fmt( "%n%c", players[ i ], is_user_admin( players[ i ] )? '*':' ' ), buff, (get_user_flags( players[ i ] ) & ADMIN_FLAG_IMMUNITY)? (1<<26):0 );
+    }
+    menu_display( id, menuid );
+}
+public MainMenuHandler( id, menuid, item )
+{
+    if( is_user_connected( id ) && item >= 0 )
+    {
+        new buff[ 2 ];
+        menu_item_getinfo( menuid, item, _, buff, charsmax( buff ) );
+        new pid = find_player( "k", buff[ 0 ] );
+        if( pid )
+        {
+            g_IsBanning[ id ] = buff[ 0 ];
+            if( g_isBanningReason[ id ][ 0 ] )
+                ConfirmMenu( id );
+            else
+                menu_display( id, g_ReasonsMenu );       
+        }
+        else
+        {
+            client_print_color( id, print_team_red, "^4[CBAN]^1 Player left. You can use ^3amx_offbanmenu^1 instead." );
+        }
+    }
+    else
+        g_IsBanning[ id ] = 0;
+    
+    clear_bit( bIsOffBan, id );
+    menu_destroy( menuid );
+    return PLUGIN_HANDLED;
+}
+
+public ReasonHandler( id, menuid, item )
+{
+    if( is_user_connected( id ) && item >= 0 && g_IsBanning[ id ] )
+    {
+        if( item == 0 )
+            client_cmd( id, "messagemode _reason_" );
+        else
+        {
+            menu_item_getinfo( menuid, item, _, _, _, g_isBanningReason[ id ], MAX_REASON_LENGTH - 1 );
+            g_isBanningTime[ id ] = item - 1;
+            clear_bit( bIsUsingCustomTime, id );
+            ConfirmMenu( id );
+        }
+    }
+    else
+    {
+        clear_bit( bIsUsingCustomTime, id );
+        clear_bit( bIsOffBan, id );
+        g_isBanningTime[ id ] = 0;
+        g_IsBanning[ id ] = 0;
+        g_isBanningReason[ id ][ 0 ] = 0;
+    }
+    //menu_cancel( id );
+    return PLUGIN_HANDLED;
+}
+
+ConfirmMenu( id )
+{
+    new menuid = menu_create( "Confirm Ban", "ConfirmHandler" );
+    
+    new pid;
+
+    if( !g_IsBanning[ id ] )
+        return;
+
+    if( check_bit( bIsOffBan, id ) )
+    {
+        pid = g_IsBanning[ id ] - 1;
+    }
+    else
+    {
+        pid = find_player( "k", g_IsBanning[ id ] );
+        if( !pid )
+        {
+            client_print_color( id, print_team_red, "^4[CBAN]^1 Player left. You can use ^3amx_offbanmenu^1 instead." );
+            return;
+        }
+    }
+
+    if( check_bit( bIsOffBan, id ) )
+        menu_additem( menuid, fmt( "\yPlayer: \w%a", ArrayGetStringHandle( hOffBanName, pid ) ) );
+    else
+        menu_additem( menuid, fmt( "\yPlayer: \w%n", pid ) );
+    
+    menu_additem( menuid, fmt( "\yReason: \w%s", g_isBanningReason[ id ] ) );
+    
+    new time; 
+    if( check_bit( bIsUsingCustomTime, id ) )
+        time = g_isBanningTime[ id ];
+    else
+        time = g_ReasonBanTimes[ g_isBanningTime[ id ] ];
+
+    if( time == 0 )
+        menu_additem( menuid, "\yBan Length: \wPermanent^n")
+    else
+        menu_additem( menuid, fmt( "\yBan Length: \w%d^n", time ) );
+
+    menu_additem( menuid, "\rConfirm" );
+
+    menu_display( id, menuid );
+}
+
+public ConfirmHandler( id, menuid, item )
+{
+    if( is_user_connected( id ) && item >= 0 && g_IsBanning[ id ] )
+    {
+        switch( item )
+        {
+            case 0:
+            {
+                if( check_bit( bIsOffBan, id ) )
+                    OffBanMenu( id );
+                else
+                    OpenMainMenu( id );
+            }
+            case 1: 
+                menu_display( id, g_ReasonsMenu );
+            case 2: 
+                menu_display( id, g_BanTimesMenu );
+            case 3: 
+            {
+                new time;
+                if( check_bit( bIsUsingCustomTime, id ) )
+                    time = g_isBanningTime[ id ];
+                else
+                    time = g_ReasonBanTimes[ g_isBanningTime[ id ] ];
+
+                if( check_bit( bIsOffBan, id ) )
+                    BanPlayer( id, -(g_IsBanning[ id ] - 1), time, g_isBanningReason[ id ] );
+                else
+                    BanPlayer( id, g_IsBanning[ id ], time, g_isBanningReason[ id ] );  
+                
+                clear_bit( bIsUsingCustomTime, id );
+                clear_bit( bIsOffBan, id );
+                g_IsBanning[ id ] = 0;
+                g_isBanningTime[ id ] = 0;
+                g_isBanningReason[ id ][ 0 ] = 0;
+            }
+        }   
+    }
+    else
+    {
+        clear_bit( bIsUsingCustomTime, id );
+        clear_bit( bIsOffBan, id );
+        g_IsBanning[ id ] = 0;
+        g_isBanningTime[ id ] = 0;
+        g_isBanningReason[ id ][ 0 ] = 0;
+    }
+
+    menu_destroy( menuid );
     return PLUGIN_HANDLED;
 }
 
 public CmdOffBanMenu( id, level, cid )
 {
     if( cmd_access( id, level, cid, 0 ) )
+    {
+        clear_bit( bIsUsingCustomTime, id );
+        clear_bit( bIsOffBan, id );
+        g_IsBanning[ id ] = 0;
+        g_isBanningTime[ id ] = 0;
+        g_isBanningReason[ id ][ 0 ] = 0;
         OffBanMenu( id );
+    }
     
     return PLUGIN_HANDLED;
 }
@@ -879,11 +1177,10 @@ public OffBanMenu( id )
     new menuid = menu_create( "OffBan Menu", "OffBanHandler" );
 
     new max = ArraySize( hOffBanName );
-    new buff[ 2 ];
+
     for( new i; i < max; i++ )
     {
-        buff[ 0 ] = i; buff[ 1 ] = 0;
-        menu_additem( menuid, fmt( "%a", ArrayGetStringHandle( hOffBanName, i ) ), buff );
+        menu_additem( menuid, fmt( "%a", ArrayGetStringHandle( hOffBanName, i ) ) );
     }
     menu_display( id, menuid, _, 10 );
 }
@@ -892,17 +1189,69 @@ public OffBanHandler( id, menuid, item )
 {
     if( is_user_connected( id ) && item >= 0 )
     {
-        new buff[ 3 ], name[ MAX_NAME_LENGTH ];
-        menu_item_getinfo( menuid, item, _, buff, charsmax( buff ) );
-        new data[ eOffBanData ];
-        ArrayGetString( hOffBanName, buff[ 0 ], name, charsmax( name ) );
-        ArrayGetArray( hOffBanData, buff[ 0 ], data, sizeof data );
-        if( !data[ OFF_IMMUNITY ] )
-        {
-
-        }
+        set_bit( bIsOffBan, id );
+        g_IsBanning[ id ] = item + 1;
+        if( g_isBanningReason[ id ][ 0 ] )
+            ConfirmMenu( id );
+        else
+            menu_display( id, g_ReasonsMenu );
     }
     menu_destroy( menuid );
+    return PLUGIN_HANDLED;
+}
+
+public CmdReason( id )
+{
+    if( !g_IsBanning[ id ] )
+        return PLUGIN_HANDLED;
+    
+    read_args( g_isBanningReason[ id ], MAX_REASON_LENGTH - 1 );
+    remove_quotes( g_isBanningReason[ id ] );
+    trim( g_isBanningReason[ id ] );
+    if( !g_isBanningReason[ id ][ 0 ] )
+        client_cmd( id, "messagemode _reason_" );
+    else
+        menu_display( id, g_BanTimesMenu );
+    return PLUGIN_HANDLED;
+}
+
+public BanLengthHandler( id, menuid, item )
+{
+    if( is_user_connected( id ) && item >= 0 && g_IsBanning[ id ] )
+    {
+        if( item == 0 )
+            client_cmd( id, "messagemode _ban_length_" );
+        else
+        {
+            new szLength[ 10 ]
+            menu_item_getinfo( menuid, item, _, _, _, szLength, charsmax( szLength ) );
+            set_bit( bIsUsingCustomTime, id );
+            g_isBanningTime[ id ] = str_to_num( szLength );
+            ConfirmMenu( id );
+        }
+    }
+    else
+    {
+        g_IsBanning[ id ] = 0;
+        g_isBanningReason[ id ][ 0 ] = 0;
+    }
+
+    return PLUGIN_HANDLED;
+}
+
+public CmdBanLength( id )
+{
+    if( !g_IsBanning[ id ] )
+        return PLUGIN_HANDLED;
+    
+    new time[ 12 ];
+    read_args( time, charsmax( time ) );
+    remove_quotes( time );
+    trim( time );
+
+    set_bit( bIsUsingCustomTime, id );
+    g_isBanningTime[ id ] = str_to_num( time );
+    ConfirmMenu( id );
     return PLUGIN_HANDLED;
 }
 
@@ -926,11 +1275,12 @@ SQLCheckError( errNum, error[] )
         set_fail_state( error );
 }
 
+// admin, player, ban_length, ban reason 
 public _CBan_BanPlayer( plugin, argc )
 {
-    if( argc < 4 )
+    if( argc <= 4 )
     {
-        log_error( 1, "CBan_BanPlayer needs 4 parameters ( %d ).", argc );
+        log_error( 1, "CBan_BanPlayer needs at least 4 parameters ( %d ).", argc );
         return;   
     }
     new pid = get_param( 2 );
@@ -945,10 +1295,10 @@ public _CBan_BanPlayer( plugin, argc )
 
     BanPlayer( get_param( 1 ), pid, ban_length, ban_reason );
 }
-
+// admin, target[], targetType 
 public _CBan_UnbanPlayer( plugin, argc )
 {
-    if( argc < 3 )
+    if( argc <= 3 )
     {
         log_error( 1, "CBan_BanPlayer needs 3 parameters ( %d ).", argc );
         return;  
@@ -957,7 +1307,70 @@ public _CBan_UnbanPlayer( plugin, argc )
     new target[ MAX_NAME_LENGTH ];
     get_string( 2, target, charsmax( target ) );
 
-    UnbanPlayer( get_param( 1 ), target, get_param( 3  ) );
+    UnbanPlayer( get_param( 1 ), target, get_param( 3 ) );
+}
+
+// admin, target[], ban_length, ban_reason[]
+public _CBan_OffBanPlayer( plugin, argc )
+{
+    if( argc <= 4 )
+    {
+        log_error( 1, "CBan_BanPlayer needs at least 4 parameters ( %d ).", argc );
+        return 0;
+    }
+    new target[ MAX_NAME_LENGTH ];
+    get_string( 2, target, charsmax( target ) );
+
+    new pid = find_player( "bl", target );
+    if( pid && ( get_user_flags( pid ) & ADMIN_FLAG_IMMUNITY ) )
+        return 0;
+    new bool:isInGame = true;
+    if( !pid )
+    {
+        isInGame = false;
+        pid = ArrayFindStringContaini( hOffBanName, target );
+        if( pid == -1 )
+            return 0;
+    }
+
+    new ban_reason[ MAX_REASON_LENGTH ];
+    get_string( 4, ban_reason, charsmax( ban_reason ) );
+    
+    BanPlayer( get_param( 1 ), isInGame? pid:-pid, abs( get_param( 3 ) ), ban_reason );
+    return 1;
+}
+
+// admin, target[], ban_length, ban_reason
+public _CBan_AddBanPlayer( plugin, argc )
+{
+    if( argc <= 4 )
+    {
+        log_error( 1, "CBan_BanPlayer needs at least 4 parameters ( %d ).", argc );
+        return 0;
+    }
+    
+    new target[ MAX_NAME_LENGTH ];
+    get_string( 2, target, charsmax( target ) );
+    
+    new ban_reason[ MAX_REASON_LENGTH ];
+    get_string( 4, ban_reason, charsmax( ban_reason ) );
+
+    new pid = find_player( "cl", target );
+
+    if( !pid )
+        pid = find_player( "d", target );
+
+    if( pid )
+    {
+        if( !( get_user_flags( pid ) & ADMIN_FLAG_IMMUNITY ) )
+            BanPlayer( get_param( 1 ), pid, abs( get_param( 3 ) ), ban_reason );
+        else
+            return 0;
+    }
+    else
+        AddBanPlayer( get_param( 1 ), target, abs( get_param( 3 ) ), ban_reason );
+    
+    return 1;
 }
 
 ArrayFindStringContaini( Array:which, const item[] )
