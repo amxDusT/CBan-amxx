@@ -1,0 +1,12 @@
+[en]
+MSG_1 = You have been banned from this server.
+MSG_NICK = Nick
+MSG_STEAMID = SteamID
+MSG_IP = IP
+MSG_REASON = Reason
+MSG_LENGTH = Ban Length
+MSG_PERMANENT = Permanent.
+MSG_TIMELEFT = Timeleft
+MSG_ADMIN = Admin
+MSG_SERVERNAME = Server Name
+MSG_COMPLAIN = You can complain about your ban @
