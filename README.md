@@ -6,7 +6,7 @@ If you're using AMXBans, consider checking the "master" branch.
 If you want something that works separated from your default ban system, check the "default" branch.
 
 Features:
-    - a better ban system ( doesn't only ban by steamid and/or IP ).
+ - a better ban system ( doesn't only ban by steamid and/or IP ).
     - works (only) with database.
     - amx_offban (ban recent players that were ingame).
     - amx_addban (ban a player by steamid or IP. if this player joins in the server, the ban details will be updated to his).
