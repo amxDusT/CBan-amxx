@@ -3,7 +3,7 @@
 #endif
 #define _cban_main_included
 
-#define VERSION		"1.0"
+#define VERSION		"1.0.5"
 
 enum _:UnbanType
 {
@@ -31,13 +31,60 @@ enum _:UnbanType
 #define MIN_STEAMID_LENGTH  11
 #define MIN_TARGET_LENGTH   5     // if nick/ip is lower than this, don't do anything ( unban, etc ).
 
+// for the menu stuff
+#define MAX_REASONS     20
+#define MAX_BANTIMES    15
+#define DEFAULT_TIME    60
+
 /**
+* Ban a player.
+* @note if admin's ID is not connected or <0, it will consider server.
 *
-*
-*
+* @param  admin       Admin's ID banning the player.
+* @param  player      Player's ID.
+* @param  banLength   Ban length.
+* @param  banReason   Ban reason.
 */
+native CBan_BanPlayer( admin = 0, player, banLength, banReason[] );
 
+/**
+* Unban a player.
+* @note if admin's ID is not connected or <0, it will consider server.
+* @note targetType serves to know whether the target is nick,ip or steamid.
+*
+* @param  admin       Admin's ID unbanning the player.
+* @param  target      player's nick, ip or steamid.
+* @param  targetType  UT_NICK, UT_IP or UT_STEAMID
+*/
+native CBan_UnbanPlayer( admin = 0, target[], targetType = UT_NICK );
 
+/**
+* Bans a player if he was ingame recently.
+* @note if admin's ID is not connected or <0, it will consider server.
+* @note if target is ingame, it will normally ban him.
+*
+* @param  admin       Admin's ID banning the player.
+* @param  target      Player's nick.
+* @param  banLength   Ban length.
+* @param  banReason   Ban reason.
+*
+* @return   0 if target is not found as immunity. 1 otherwise.
+*/
+native CBan_OffBanPlayer( admin = 0, target[], banLength, banReason[] );
+
+/**
+* Bans a player by IP or steamid if he's not ingame.
+* @note if admin's ID is not connected or <0, it will consider server.
+* @note if target is ingame, it will normally ban him.
+*
+* @param  admin       Admin's ID banning the player.
+* @param  target      Player's steamid or IP.
+* @param  banLength   Ban length.
+* @param  banReason   Ban reason.
+*
+* @return   0 if target is ingame and has immunity. 1 otherwise.
+*/
+native CBan_AddBanPlayer( admin = 0, target[], banLength, banReason[] );
 
 /**
 *   Called before the player is banned. 
