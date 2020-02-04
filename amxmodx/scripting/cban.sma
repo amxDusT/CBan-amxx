@@ -309,18 +309,18 @@ public SQL_Init()
     formatex( szQuery, charsmax( szQuery ), "CREATE TABLE IF NOT EXISTS `%s` (\
                                                 `bid` INT NOT NULL AUTO_INCREMENT,\
                                                 `player_ip` VARCHAR(16) NOT NULL,\
-                                                `player_last_ip` VARCHAR(16) NOT NULL,\
-                                                `player_id` VARCHAR(30) NOT NULL UNIQUE,\
+                                                `player_last_ip` VARCHAR(16) NOT NULL DEFAULT 'Unknown',\
+                                                `player_id` VARCHAR(30) NOT NULL,\
                                                 `player_nick` VARCHAR(32) NOT NULL,\
-                                                `admin_ip` VARCHAR(16) NOT NULL,\
-                                                `admin_id` VARCHAR(30) NOT NULL,\
+                                                `admin_ip` VARCHAR(16) NOT NULL DEFAULT 'Unknown',\
+                                                `admin_id` VARCHAR(30) NOT NULL DEFAULT 'Unknown',\
                                                 `admin_nick` VARCHAR(32) NOT NULL,\
                                                 `ban_type` VARCHAR(7) NOT NULL,\
                                                 `ban_reason` VARCHAR(100) NOT NULL,\
                                                 `ban_created` INT NOT NULL,\
                                                 `ban_length` INT NOT NULL,\
-                                                `server_ip` VARCHAR(%d) NOT NULL,\
-                                                `server_name` VARCHAR(64) NOT NULL,\
+                                                `server_ip` VARCHAR(%d) NOT NULL DEFAULT 'IP_LAN',\
+                                                `server_name` VARCHAR(64) NOT NULL DEFAULT 'WEBSITE',\
                                                 `ban_kicks` INT NOT NULL DEFAULT 0,\
                                                 `expired` INT(1) NOT NULL,\
                                                 `c_code` VARCHAR(%d) NOT NULL DEFAULT 'unknown',\
@@ -932,7 +932,7 @@ AddBanPlayer( admin, target[], ban_length, ban_reason[ MAX_REASON_LENGTH ] )
     
     new query[ 512 ];
     formatex( query, charsmax( query ), "INSERT INTO `%s` VALUES(NULL,'%s','0','%s','AddBanPlayer','%s','%s','%s','%s','%s',%d,%d,'%s','%s',0,\
-                                        0,'',1);", g_BanTable, targetEsc, targetEsc, admin_ip, admin_id, bIsId==false? g_ServerNameEsc:admin_nick, szBanType,
+                                        0,'',1);", g_BanTable, szBanType[0]=='I'? targetEsc:"unknown", szBanType[0]=='S'? targetEsc:"unknown", admin_ip, admin_id, bIsId==false? g_ServerNameEsc:admin_nick, szBanType,
                                         ban_reason, get_systime(), ban_length, g_ServerIPWithoutPort, g_ServerNameEsc );
     SQL_ThreadQuery( hTuple, "IgnoreHandle", query );
 }
@@ -1272,7 +1272,7 @@ stock bool:is_user_steam( id )
 SQLCheckError( errNum, error[] )
 {
     if( errNum )
-        set_fail_state( error );
+        log_amx( error );
 }
 
 // admin, player, ban_length, ban reason 
@@ -1362,10 +1362,10 @@ public _CBan_AddBanPlayer( plugin, argc )
 
     if( pid )
     {
-        if( !( get_user_flags( pid ) & ADMIN_FLAG_IMMUNITY ) )
-            BanPlayer( get_param( 1 ), pid, abs( get_param( 3 ) ), ban_reason );
-        else
+        if( get_user_flags( pid ) & ADMIN_FLAG_IMMUNITY )
             return 0;
+        else
+            BanPlayer( get_param( 1 ), pid, abs( get_param( 3 ) ), ban_reason );
     }
     else
         AddBanPlayer( get_param( 1 ), target, abs( get_param( 3 ) ), ban_reason );
