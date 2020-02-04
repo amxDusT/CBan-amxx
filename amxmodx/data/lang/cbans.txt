@@ -10,3 +10,6 @@ MSG_TIMELEFT = Timeleft
 MSG_ADMIN = Admin
 MSG_SERVERNAME = Server Name
 MSG_COMPLAIN = You can complain about your ban @
+
+MSG_RANGE_1 = Your IP is banned from this server.
+MSG_RANGE_2 = This is an IP Range ban.
