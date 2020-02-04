@@ -27,7 +27,16 @@
             - added the max_offban_save when reading the ini ( before it was considering max = 0 )
             - added native for banning with offban
             - added native for banning with addban
-            
+        v1.0.6 ( mostly to respect some limitations from web servers that use AMXbans )
+            - added default columns for ban table
+            - added default values for ip/steamid when banning with amx_addban
+            - added value limitation of addban when banning on steamid/ip so it doesn't exceed sql table
+            - if sql table has an error, it won't stop the plugin but just give a log error. 
+	v1.0.7
+	    - added cbans_range
+	    - added various messages for cbans_range in cbans.txt
+	    - added range table in cbans.ini
+	    - various bug fixes
 */
 
 #include < amxmodx >
@@ -601,10 +610,6 @@ public SQL_CheckBanHandle( failState, Handle:query, error[], errNum, data[], dat
     add( szQuery, charsmax( szQuery ), fmt( " WHERE bid=%d;", bid ) );
     SQL_ThreadQuery( hTuple, "IgnoreHandle", szQuery );
     
-    //debug
-    //server_print( "%d", strlen( szQuery ) );
-    //server_print( szQuery );
-
     console_print( id, "[CBAN] ===============================================" );
     console_print( id, "[CBAN] %L", id, "MSG_1" );
     console_print( id, "[CBAN] %L: %n.", id, "MSG_NICK", id );
@@ -895,9 +900,15 @@ AddBanPlayer( admin, target[], ban_length, ban_reason[ MAX_REASON_LENGTH ] )
     new szBanType[ 2 ];
     
     if( regex_match_c( target, pPattern ) ) 
+    {
         szBanType[ 0 ] = 'I';
+        target[ MAX_IP_LENGTH - 1 ] = 0;    // to avoid the string being too long for the database
+    }
     else if( strlen( target ) > MIN_STEAMID_LENGTH && ( containi( target, "VALVE_") != -1 || containi( target, "STEAM_" ) != -1 ) )
+    {
         szBanType[ 0 ] = 'S';
+        target[ MAX_STEAMID_LENGTH - 1 ] = 0;
+    }
     else
     {
         console_print( admin, "Invalid argument. Must be IP or steamid." );
@@ -932,7 +943,7 @@ AddBanPlayer( admin, target[], ban_length, ban_reason[ MAX_REASON_LENGTH ] )
     
     new query[ 512 ];
     formatex( query, charsmax( query ), "INSERT INTO `%s` VALUES(NULL,'%s','0','%s','AddBanPlayer','%s','%s','%s','%s','%s',%d,%d,'%s','%s',0,\
-                                        0,'',1);", g_BanTable, szBanType[0]=='I'? targetEsc:"unknown", szBanType[0]=='S'? targetEsc:"unknown", admin_ip, admin_id, bIsId==false? g_ServerNameEsc:admin_nick, szBanType,
+                                        0,'',1);", g_BanTable, szBanType[0]=='I'? targetEsc:"1.1.1.1", szBanType[0]=='S'? targetEsc:"STEAM_0:0:1", admin_ip, admin_id, bIsId==false? g_ServerNameEsc:admin_nick, szBanType,
                                         ban_reason, get_systime(), ban_length, g_ServerIPWithoutPort, g_ServerNameEsc );
     SQL_ThreadQuery( hTuple, "IgnoreHandle", query );
 }
