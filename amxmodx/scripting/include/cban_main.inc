@@ -3,7 +3,7 @@
 #endif
 #define _cban_main_included
 
-#define VERSION		"1.0.5"
+#define VERSION		"1.0.7"
 
 enum _:UnbanType
 {
@@ -19,6 +19,7 @@ enum _:UnbanType
 #define ADMIN_FLAG_SCREENSHOTS	ADMIN_BAN
 #define ADMIN_FLAG_UNBAN        ADMIN_IMMUNITY
 #define ADMIN_FLAG_IMMUNITY     ADMIN_IMMUNITY
+#define ADMIN_FLAG_RANGE        ADMIN_IMMUNITY
 
 // length stuff
 #define MAX_CSIZE           35
