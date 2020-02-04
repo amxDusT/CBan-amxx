@@ -30,3 +30,4 @@ API:
 TO DO:
  - cvar for screenshots.
  - add some huds to screenshots.
+ - change ban times in the amx_banmenu to show hour(s), day(s), week(s)
