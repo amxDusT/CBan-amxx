@@ -3,7 +3,7 @@
 #endif
 #define _cban_main_included
 
-#define VERSION		"1.0.7"
+#define VERSION		"1.0.8"
 
 enum _:UnbanType
 {
