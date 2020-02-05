@@ -32,11 +32,8 @@
             - added default values for ip/steamid when banning with amx_addban
             - added value limitation of addban when banning on steamid/ip so it doesn't exceed sql table
             - if sql table has an error, it won't stop the plugin but just give a log error. 
-	v1.0.7
-	    - added cbans_range
-	    - added various messages for cbans_range in cbans.txt
-	    - added range table in cbans.ini
-	    - various bug fixes
+	v1.0.8
+	    - banmenu reasons show in words instead of numbers. 
 */
 
 #include < amxmodx >
@@ -71,6 +68,7 @@ enum _:eUpdateBits
 enum _:eTasks ( +=1000 )
 {
     TASK_KICK = 231,
+    TASK_SHOW
 }
 
 enum _:eOffBanData
@@ -82,6 +80,15 @@ enum _:eOffBanData
     OFF_IMMUNITY
 }
 
+enum _:eLateInfo
+{
+    ID,
+    PID,
+    LSTEAMID[ MAX_STEAMID_LENGTH ],
+    LIP[ MAX_IP_LENGTH ],
+    LREASON[ MAX_REASON_LENGTH ],
+    LLENGTH
+}
 new Array:hOffBanData;
 new Array:hOffBanName;
 new g_iItems = 0;
@@ -102,9 +109,11 @@ new iAddBanType, iOffBanType;
 
 new g_IsBanning[ MAX_PLAYERS + 1 ];
 new g_isBanningReason[ MAX_PLAYERS + 1 ][ MAX_REASON_LENGTH ];
+new iBanTimes[ MAX_BANTIMES ];
 new g_isBanningTime[ MAX_PLAYERS + 1 ];
 new g_ReasonBanTimes[ MAX_REASONS ];
 new bIsOffBan;
+new bIsUsingBanReasonTime;
 new bIsUsingCustomTime;
 
 new fwPlayerBannedPre, fwPlayerBannedPost;
@@ -253,7 +262,6 @@ ReadAndMakeMenus()
 
     new bool:isReadingBans = false;
     new reasons[ MAX_REASONS ][ MAX_REASON_LENGTH ];
-    new iBanTimes[ MAX_BANTIMES ];
     new iPosReason, iPosBanTimes;
     while( fgets( fp, szData, charsmax( szData ) ) )
     {
@@ -300,15 +308,17 @@ ReadAndMakeMenus()
     g_BanTimesMenu = menu_create( "Ban Length", "BanLengthHandler" );
     menu_additem( g_BanTimesMenu, "Custom" );
 
+    new szTime[ 64 ];
     for( new i; i < iPosBanTimes; i++ )
     {
         if( iBanTimes[ i ] == 0 )
             menu_additem( g_BanTimesMenu, "Permanent" );
         else
-            menu_additem( g_BanTimesMenu, fmt( "%d", iBanTimes[ i ] ) );
+        {
+            get_time_length( 0, iBanTimes[ i ], timeunit_minutes, szTime, charsmax( szTime ) );
+            menu_additem( g_BanTimesMenu, szTime );
+        }        
     }
-        
-
 }
 
 public SQL_Init()
@@ -380,6 +390,10 @@ public client_disconnected( id )
     if( task_exists( id ) )
         remove_task( id );
     
+    if( task_exists( id + TASK_KICK ) )
+        remove_task( id + TASK_KICK );
+    if( task_exists( id + TASK_SHOW ) )
+        remove_task( id + TASK_SHOW );
     if( !g_PlayerCode[ id ][ 0 ] )
         return;
     new name[ MAX_NAME_LENGTH ];
@@ -458,7 +472,7 @@ public SQL_CheckProtectorHandle( failState, Handle:query, error[], errNum, data[
         get_user_ip( id, ip, charsmax( ip ), 1 );
 
         formatex( query, charsmax( query ), "SELECT * FROM `%s` WHERE (c_code='%s') OR (player_id='%s' AND ban_type LIKE '%%S%%') \
-                                            OR ( ( player_ip='%s' OR player_last_ip='%s')AND ban_type LIKE '%%I%%') AND expired=0;", g_BanTable, g_PlayerCode[ id ],
+                                            OR ( ( player_ip='%s' OR player_last_ip='%s') AND ban_type LIKE '%%I%%') AND expired=0;", g_BanTable, g_PlayerCode[ id ],
                                             authid, ip, ip );
 
         SQL_ThreadQuery( hTuple, "SQL_CheckBanHandle", query, data, dataSize );
@@ -474,164 +488,172 @@ public SQL_CheckBanHandle( failState, Handle:query, error[], errNum, data[], dat
     if( !is_user_connected( id ) || !SQL_NumResults( query ) )
         return;
 
-    
-    new bid = SQL_ReadResult( query, 0 );
-    new ban_created = SQL_ReadResult( query, 10 );
-    new ban_length = SQL_ReadResult( query, 11 );
-    new current_time = get_systime();
-    new update_ban = SQL_ReadResult( query, 17 );
+    new max = SQL_NumResults( query );
 
-    if( update_ban > 0 && ( get_user_flags( id ) & ADMIN_FLAG_IMMUNITY ) )   // let's avoid random admins to ban immunity flag people through a "workaround"
-    {
-        SQL_ThreadQuery( hTuple, "IgnoreHandle", fmt( "DELETE FROM `%s` WHERE `bid`=%d", g_BanTable, bid ) );
-        return;
-    }
-
-    if( ban_created + ban_length < current_time && ban_length && ( update_ban != 1 || !iAddBanType ) && ( update_ban != 2 || !iOffBanType ) )      // ban has expired. 
-    {
-        // update expired to be 1, so next time it doesn't check it.
-        SQL_ThreadQuery( hTuple, "IgnoreHandle", fmt( "UPDATE `%s` SET `expired`=1 WHERE `bid`=%d", g_BanTable, bid ) );
-        return;
-    }
-    
+    new bid, ban_created, ban_length, current_time, update_ban;
     new player_ip[ MAX_IP_LENGTH ], player_id[ MAX_STEAMID_LENGTH ], player_nick[ MAX_NAME_LENGTH ];
     new admin_nick[ MAX_NAME_LENGTH ], ban_reason[ MAX_REASON_LENGTH ];
     new server_name[ 64 ];
     new ccode[ MAX_CSIZE ];
     new ip[ MAX_IP_LENGTH ];
-    
-    get_user_ip( id, ip, charsmax( ip ), 1 );
-
     new szQuery[ 512 ];
-    formatex( szQuery, charsmax( szQuery ), "UPDATE `%s` SET player_last_ip='%s',ban_kicks=ban_kicks+1", g_BanTable, ip );
-    
-    SQL_ReadResult( query, 1, player_ip, charsmax( player_ip ) );
-    SQL_ReadResult( query, 3, player_id, charsmax( player_id ) );
-    SQL_ReadResult( query, 4, player_nick, charsmax( player_nick ) );
-    SQL_ReadResult( query, 7, admin_nick, charsmax( admin_nick ) );
-    SQL_ReadResult( query, 9, ban_reason, charsmax( ban_reason ) );
-    SQL_ReadResult( query, 13, server_name, charsmax( server_name ) );
-    SQL_ReadResult( query, 16, ccode, charsmax( ccode ) );
 
-    if( !ccode[ 0 ] || containi( ccode, "unknown" ) != -1 )
+    for( new i; i < max; i++ )
     {
-        add( szQuery, charsmax( szQuery ), fmt( ",c_code='%s'", g_PlayerCode[ id ] ) );
-        copy( ccode, charsmax( ccode ), g_PlayerCode[ id ] );
-    }
+        bid = SQL_ReadResult( query, 0 );
+        ban_created = SQL_ReadResult( query, 10 );
+        ban_length = SQL_ReadResult( query, 11 );
+        current_time = get_systime();
+        update_ban = SQL_ReadResult( query, 17 );
 
-
-    if( update_ban == 1 )    // if addban
-    {
-        new nick[ MAX_NAME_LENGTH * 2 ], authid[ MAX_STEAMID_LENGTH ];
-        
-        get_user_authid( id, authid, charsmax( authid ) );
-        SQL_QuoteString( Empty_Handle, nick, charsmax( nick ), fmt( "%n", id ) );
-
-        add( szQuery, charsmax( szQuery ), fmt( ",player_nick='%s',player_id='%s',player_ip='%s',update_ban=0", nick, authid, ip ) );
-        copy( player_nick, charsmax( player_nick ), fmt( "%n", id ) );
-        copy( player_ip, charsmax( player_ip ), ip );
-        copy( player_id, charsmax( player_id ), authid );
-
-        new szBanType[ 3 ];
-        switch( iBanType )
+        if( update_ban > 0 && ( get_user_flags( id ) & ADMIN_FLAG_IMMUNITY ) )   // let's avoid random admins to ban immunity flag people through a "workaround"
         {
-            case 0: szBanType[ 0 ] = 'S';
-            case 1: szBanType[ 0 ] = 'I';
-            case 2: copy( szBanType, charsmax( szBanType ), "SI" );
-            case 3:
+            SQL_ThreadQuery( hTuple, "IgnoreHandle", fmt( "DELETE FROM `%s` WHERE `bid`=%d", g_BanTable, bid ) );
+            SQL_NextRow( query )
+            continue;
+        }
+
+        if( ban_created + ban_length < current_time && ban_length && ( update_ban != 1 || !iAddBanType ) && ( update_ban != 2 || !iOffBanType ) )      // ban has expired. 
+        {
+            // update expired to be 1, so next time it doesn't check it.
+            SQL_ThreadQuery( hTuple, "IgnoreHandle", fmt( "UPDATE `%s` SET `expired`=1 WHERE `bid`=%d", g_BanTable, bid ) );
+            SQL_NextRow( query );
+            continue;
+        }
+
+        get_user_ip( id, ip, charsmax( ip ), 1 );
+
+        formatex( szQuery, charsmax( szQuery ), "UPDATE `%s` SET player_last_ip='%s',ban_kicks=ban_kicks+1", g_BanTable, ip );
+        
+        SQL_ReadResult( query, 1, player_ip, charsmax( player_ip ) );
+        SQL_ReadResult( query, 3, player_id, charsmax( player_id ) );
+        SQL_ReadResult( query, 4, player_nick, charsmax( player_nick ) );
+        SQL_ReadResult( query, 7, admin_nick, charsmax( admin_nick ) );
+        SQL_ReadResult( query, 9, ban_reason, charsmax( ban_reason ) );
+        SQL_ReadResult( query, 13, server_name, charsmax( server_name ) );
+        SQL_ReadResult( query, 16, ccode, charsmax( ccode ) );
+
+        if( !ccode[ 0 ] || containi( ccode, "unknown" ) != -1 )
+        {
+            add( szQuery, charsmax( szQuery ), fmt( ",c_code='%s'", g_PlayerCode[ id ] ) );
+            copy( ccode, charsmax( ccode ), g_PlayerCode[ id ] );
+        }
+
+
+        if( update_ban == 1 )    // if addban
+        {
+            new nick[ MAX_NAME_LENGTH * 2 ], authid[ MAX_STEAMID_LENGTH ];
+            
+            get_user_authid( id, authid, charsmax( authid ) );
+            SQL_QuoteString( Empty_Handle, nick, charsmax( nick ), fmt( "%n", id ) );
+
+            add( szQuery, charsmax( szQuery ), fmt( ",player_nick='%s',player_id='%s',player_ip='%s',update_ban=0", nick, authid, ip ) );
+            copy( player_nick, charsmax( player_nick ), fmt( "%n", id ) );
+            copy( player_ip, charsmax( player_ip ), ip );
+            copy( player_id, charsmax( player_id ), authid );
+
+            new szBanType[ 3 ];
+            switch( iBanType )
             {
-                if( is_user_steam( id ) )
-                    szBanType[ 0 ] = 'S';
-                else
-                    szBanType[ 0 ] = 'I';
+                case 0: szBanType[ 0 ] = 'S';
+                case 1: szBanType[ 0 ] = 'I';
+                case 2: copy( szBanType, charsmax( szBanType ), "SI" );
+                case 3:
+                {
+                    if( is_user_steam( id ) )
+                        szBanType[ 0 ] = 'S';
+                    else
+                        szBanType[ 0 ] = 'I';
+                }
+                default: copy( szBanType, charsmax( szBanType ), "SI" );
             }
-            default: copy( szBanType, charsmax( szBanType ), "SI" );
-        }
+            
+            add( szQuery, charsmax( szQuery ), fmt(",ban_type='%s'", szBanType ) );
         
-        add( szQuery, charsmax( szQuery ), fmt(",ban_type='%s'", szBanType ) );
-    
-        if( iAddBanType )
-        {
-            add( szQuery, charsmax( szQuery ), fmt( ",ban_created=%d", current_time ) );
-            ban_created = current_time;
-        }
-    }
-    else
-    {
-        if( update_ban == 2 )
-        {
-            if( iOffBanType )
+            if( iAddBanType )
             {
                 add( szQuery, charsmax( szQuery ), fmt( ",ban_created=%d", current_time ) );
                 ban_created = current_time;
             }
-            add( szQuery, charsmax( szQuery ), ",update_ban=0" );
         }
-        if( iUpdate )
+        else
         {
-            if( check_bit( iUpdate, UCCODE ) )
+            if( update_ban == 2 )
             {
-                if( !ccode[ 0 ] || !equal( ccode, g_PlayerCode[ id ] ) )
-                    add( szQuery, charsmax( szQuery ), fmt( ",c_code='%s'", g_PlayerCode[ id ] ) );
-            }
-            if( check_bit( iUpdate, USTEAMID ) || ( check_bit( iUpdate, UST_NONSTEAM ) && !is_user_steam( id ) ) )
-            {
-                new authid[ MAX_STEAMID_LENGTH ];
-                get_user_authid( id, authid, charsmax( authid ) );
-                if( !equal( player_id, authid ) )
+                if( iOffBanType )
                 {
-                    copy( player_id, charsmax( player_id ), authid );
-                    add( szQuery, charsmax( szQuery ), fmt( ",player_id='%s'", authid ) );
+                    add( szQuery, charsmax( szQuery ), fmt( ",ban_created=%d", current_time ) );
+                    ban_created = current_time;
                 }
+                add( szQuery, charsmax( szQuery ), ",update_ban=0" );
             }
-            if( check_bit( iUpdate, UNICK ) )
+            if( iUpdate )
             {
-                new nnick[ MAX_NAME_LENGTH ];
-                get_user_name( id, nnick, charsmax( nnick ) );
-                if( !equal( player_nick, nnick ) )
+                if( check_bit( iUpdate, UCCODE ) )
                 {
-                    new nick[ MAX_NAME_LENGTH * 2 ];
-                    copy( player_nick, charsmax( player_nick ), nnick );
-                    SQL_QuoteString( Empty_Handle, nick, charsmax( nick ), nnick );
-                    add( szQuery, charsmax( szQuery ), fmt( ",player_nick='%s'", nick ) );
+                    if( !ccode[ 0 ] || !equal( ccode, g_PlayerCode[ id ] ) )
+                        add( szQuery, charsmax( szQuery ), fmt( ",c_code='%s'", g_PlayerCode[ id ] ) );
                 }
-            }
-            if( check_bit( iUpdate, UIP ) )
-            {
-                if( !equal( player_ip, ip ) )
+                if( check_bit( iUpdate, USTEAMID ) || ( check_bit( iUpdate, UST_NONSTEAM ) && !is_user_steam( id ) ) )
                 {
-                    copy( player_ip, charsmax( player_ip ), ip );
-                    add( szQuery, charsmax( szQuery ), fmt( ",player_ip='%s'", ip ) );
+                    new authid[ MAX_STEAMID_LENGTH ];
+                    get_user_authid( id, authid, charsmax( authid ) );
+                    if( !equal( player_id, authid ) )
+                    {
+                        copy( player_id, charsmax( player_id ), authid );
+                        add( szQuery, charsmax( szQuery ), fmt( ",player_id='%s'", authid ) );
+                    }
+                }
+                if( check_bit( iUpdate, UNICK ) )
+                {
+                    new nnick[ MAX_NAME_LENGTH ];
+                    get_user_name( id, nnick, charsmax( nnick ) );
+                    if( !equal( player_nick, nnick ) )
+                    {
+                        new nick[ MAX_NAME_LENGTH * 2 ];
+                        copy( player_nick, charsmax( player_nick ), nnick );
+                        SQL_QuoteString( Empty_Handle, nick, charsmax( nick ), nnick );
+                        add( szQuery, charsmax( szQuery ), fmt( ",player_nick='%s'", nick ) );
+                    }
+                }
+                if( check_bit( iUpdate, UIP ) )
+                {
+                    if( !equal( player_ip, ip ) )
+                    {
+                        copy( player_ip, charsmax( player_ip ), ip );
+                        add( szQuery, charsmax( szQuery ), fmt( ",player_ip='%s'", ip ) );
+                    }
                 }
             }
         }
-    }
 
-    add( szQuery, charsmax( szQuery ), fmt( " WHERE bid=%d;", bid ) );
-    SQL_ThreadQuery( hTuple, "IgnoreHandle", szQuery );
-    
-    console_print( id, "[CBAN] ===============================================" );
-    console_print( id, "[CBAN] %L", id, "MSG_1" );
-    console_print( id, "[CBAN] %L: %n.", id, "MSG_NICK", id );
-    console_print( id, "[CBAN] %L: %s.", id, "MSG_IP", player_ip );
-    console_print( id, "[CBAN] %L: %s.", id, "MSG_STEAMID", player_id );
-    console_print( id, "[CBAN] %L: %s.", id, "MSG_ADMIN", admin_nick );
-    console_print( id, "[CBAN] %L: %s.", id, "MSG_REASON", ban_reason );
-    if( ban_length == 0 )
-        console_print( id, "[CBAN] %L: %L", id, "MSG_LENGTH", id, "MSG_PERMANENT" );
-    else
-    {
-        new szTimeLeft[ 128 ];
-        get_time_length( id, ban_length, timeunit_minutes, szTimeLeft, charsmax( szTimeLeft ) );
-        console_print( id, "[CBAN] %L: %s.", id, "MSG_LENGTH", szTimeLeft );
-        get_time_length( id, ban_length*60 + ban_created - current_time, timeunit_seconds, szTimeLeft, charsmax( szTimeLeft ) );
-        console_print( id, "[CBAN] %L: %s.", id, "MSG_TIMELEFT", szTimeLeft );
-    }
-    console_print( id, "[CBAN] %L: %s.", id, "MSG_SERVERNAME", server_name );
-    console_print( id, "[CBAN] %L %s.", id, "MSG_COMPLAIN", g_ComplainUrl );
-    console_print( id, "[CBAN] ===============================================" );
+        add( szQuery, charsmax( szQuery ), fmt( " WHERE bid=%d;", bid ) );
+        SQL_ThreadQuery( hTuple, "IgnoreHandle", szQuery );
+        
+        console_print( id, "[CBAN] ===============================================" );
+        console_print( id, "[CBAN] %L", id, "MSG_1" );
+        console_print( id, "[CBAN] %L: %n.", id, "MSG_NICK", id );
+        console_print( id, "[CBAN] %L: %s.", id, "MSG_IP", player_ip );
+        console_print( id, "[CBAN] %L: %s.", id, "MSG_STEAMID", player_id );
+        console_print( id, "[CBAN] %L: %s.", id, "MSG_ADMIN", admin_nick );
+        console_print( id, "[CBAN] %L: %s.", id, "MSG_REASON", ban_reason );
+        if( ban_length == 0 )
+            console_print( id, "[CBAN] %L: %L", id, "MSG_LENGTH", id, "MSG_PERMANENT" );
+        else
+        {
+            new szTimeLeft[ 128 ];
+            get_time_length( id, ban_length, timeunit_minutes, szTimeLeft, charsmax( szTimeLeft ) );
+            console_print( id, "[CBAN] %L: %s.", id, "MSG_LENGTH", szTimeLeft );
+            get_time_length( id, ban_length*60 + ban_created - current_time, timeunit_seconds, szTimeLeft, charsmax( szTimeLeft ) );
+            console_print( id, "[CBAN] %L: %s.", id, "MSG_TIMELEFT", szTimeLeft );
+        }
+        console_print( id, "[CBAN] %L: %s.", id, "MSG_SERVERNAME", server_name );
+        console_print( id, "[CBAN] %L %s.", id, "MSG_COMPLAIN", g_ComplainUrl );
+        console_print( id, "[CBAN] ===============================================" );
 
-    set_task( 1.0, "KickPlayer", id + TASK_KICK );
+        set_task( 1.0, "KickPlayer", id + TASK_KICK );
+        return;
+    }   
 }
 
 
@@ -709,11 +731,11 @@ public CmdBan( id, level, cid )
     copy( ban_reason, charsmax( ban_reason ), args[ iReasonPos ] );
 
     BanPlayer( id, pid, ban_length, ban_reason );
-    
+    console_print( id, "Player %n successfully banned.", pid );
     return PLUGIN_HANDLED;
 }
 
-BanPlayer( id, pid, ban_length, ban_reason[]  )
+BanPlayer( id, pid, ban_length, ban_reason[] )
 {
     if( pid > 0 && !is_user_connected( pid ) )
         return;
@@ -721,7 +743,6 @@ BanPlayer( id, pid, ban_length, ban_reason[]  )
     new authid[ MAX_STEAMID_LENGTH ], ip[ MAX_IP_LENGTH ];
     new admin_id[ MAX_STEAMID_LENGTH ], admin_ip[ MAX_IP_LENGTH ];
     new admin_nick[ MAX_NAME_LENGTH * 2 ], player_nick[ MAX_NAME_LENGTH * 2 ];  
-    new nick[ MAX_NAME_LENGTH ];
     new ccode[ MAX_CSIZE ];
     if( pid > 0 )
     {
@@ -765,8 +786,7 @@ BanPlayer( id, pid, ban_length, ban_reason[]  )
         bIsId = true;
         get_user_authid( id, admin_id, charsmax( admin_id ) );
         get_user_ip( id, admin_ip, charsmax( admin_ip ) );
-        get_user_name( id, nick, charsmax( nick ) );
-        SQL_QuoteString( Empty_Handle, admin_nick, charsmax( admin_nick ), nick );
+        SQL_QuoteStringFmt( Empty_Handle, admin_nick, charsmax( admin_nick ), "%n", id );
     }
     else 
     {
@@ -801,38 +821,54 @@ BanPlayer( id, pid, ban_length, ban_reason[]  )
     
     if( pid > 0 )
     {
-        static ServerName[ 64 ];
-        if( !ServerName[ 0 ] )
-            get_user_name( 0, ServerName, charsmax( ServerName ) );
-        new szTimeLeft[ 128 ];
-
-        console_print( pid, "[CBAN] ===============================================" );
-        console_print( pid, "[CBAN] %L", pid, "MSG_1" );
-        console_print( pid, "[CBAN] %L: %n.", pid, "MSG_NICK", pid );
-        console_print( pid, "[CBAN] %L: %s.", pid, "MSG_IP", ip );
-        console_print( pid, "[CBAN] %L: %s.", pid, "MSG_STEAMID", authid );
-        console_print( pid, "[CBAN] %L: %s.", pid, "MSG_ADMIN", id==0? nick:ServerName );
-        console_print( pid, "[CBAN] %L: %s.", pid, "MSG_REASON", ban_reason );
-        if( ban_length == 0 )
-            console_print( pid, "[CBAN] %L: %L", pid, "MSG_LENGTH", pid, "MSG_PERMANENT" );
-        else
-        {
-            get_time_length( pid, ban_length, timeunit_minutes, szTimeLeft, charsmax( szTimeLeft ) );
-            console_print( pid, "[CBAN] %L: %s.", pid, "MSG_LENGTH", szTimeLeft );
-        }
-        console_print( pid, "[CBAN] %L: %s.", pid, "MSG_SERVERNAME", ServerName );
-        console_print( pid, "[CBAN] %L %s.", pid, "MSG_COMPLAIN", g_ComplainUrl );
-        console_print( pid, "[CBAN] ===============================================" );
-
-        client_print_color( 0, print_team_red, "^4[CBAN]^1 Admin ^4%s^1 Banned: ^3%n^1 Reason: ^3%s^1 Time: ^3%s^1", id>0? nick:"SERVER", pid, ban_reason, ban_length==0? "Permanent":szTimeLeft );
+        new data[ eLateInfo ];
+        data[ ID ] = id;
+        data[ PID ] = pid;
+        data[ LLENGTH ] = ban_length;
+        copy( data[ LREASON ], MAX_REASON_LENGTH - 1, ban_reason );
+        copy( data[ LIP ], MAX_IP_LENGTH - 1, ip );
+        copy( data[ LSTEAMID ], MAX_STEAMID_LENGTH - 1, authid );
         
         ExecuteForward( fwPlayerBannedPost, _, pid, id, ban_length, ban_reason );
-
+        set_task( 1.0, "DisplayMessage", pid + TASK_SHOW, data, sizeof data );
         set_task( 2.0, "KickPlayer", pid + TASK_KICK );
     }
     
 }
+public DisplayMessage( data[] )
+{
+    if( !is_user_connected( data[ PID ] ) )
+        return;
 
+    static ServerName[ 64 ];
+    if( !ServerName[ 0 ] )
+        get_user_name( 0, ServerName, charsmax( ServerName ) );
+    new szTimeLeft[ 128 ];
+    new nick[ MAX_NAME_LENGTH ];
+    if( data[ ID ] > 0 && is_user_connected( data[ ID ] ) )
+        get_user_name( data[ ID ], nick, charsmax( nick ) );
+    else
+        data[ ID ] = 0;
+
+    console_print( data[ PID ], "[CBAN] ===============================================" );
+    console_print( data[ PID ], "[CBAN] %L", data[ PID ], "MSG_1" );
+    console_print( data[ PID ], "[CBAN] %L: %n.", data[ PID ], "MSG_NICK", data[ PID ] );
+    console_print( data[ PID ], "[CBAN] %L: %s.", data[ PID ], "MSG_IP", data[ LIP ] );
+    console_print( data[ PID ], "[CBAN] %L: %s.", data[ PID ], "MSG_STEAMID", data[ LSTEAMID ] );
+    console_print( data[ PID ], "[CBAN] %L: %s.", data[ PID ], "MSG_ADMIN", data[ ID ]==0? ServerName:nick );
+    console_print( data[ PID ], "[CBAN] %L: %s.", data[ PID ], "MSG_REASON", data[ LREASON ] );
+    if( data[ LLENGTH ] == 0 )
+        console_print( data[ PID ], "[CBAN] %L: %L", data[ PID ], "MSG_LENGTH", data[ PID ], "MSG_PERMANENT" );
+    else
+    {
+        get_time_length( data[ PID ], data[ LLENGTH ], timeunit_minutes, szTimeLeft, charsmax( szTimeLeft ) );
+        console_print( data[ PID ], "[CBAN] %L: %s.", data[ PID ], "MSG_LENGTH", szTimeLeft );
+    }
+    console_print( data[ PID ], "[CBAN] %L: %s.", data[ PID ], "MSG_SERVERNAME", ServerName );
+    console_print( data[ PID ], "[CBAN] %L %s.", data[ PID ], "MSG_COMPLAIN", g_ComplainUrl );
+    console_print( data[ PID ], "[CBAN] ===============================================" );
+    client_print_color( 0, print_team_red, "^4[CBAN]^1 Admin ^4%s^1 Banned: ^3%n^1 Reason: ^3%s^1 Time: ^3%s^1", data[ ID ]==0? "SERVER":nick, data[ PID ], data[ LREASON ], data[ LLENGTH ]==0? "Permanent":szTimeLeft );
+}
 UnbanPlayer( id, target[ MAX_NAME_LENGTH ], type )
 {
     if( !target[ 0 ] || strlen( target ) < MIN_TARGET_LENGTH )
@@ -888,6 +924,7 @@ public CmdAddBan( id, level, cid )
     }
 
     AddBanPlayer( id, target, ban_length, ban_reason );
+
     return PLUGIN_HANDLED;
 }
 
@@ -995,6 +1032,7 @@ public CmdBanMenu( id, level, cid )
     {
         clear_bit( bIsUsingCustomTime, id );
         clear_bit( bIsOffBan, id );
+        clear_bit( bIsUsingBanReasonTime, id );
         g_IsBanning[ id ] = 0;
         g_isBanningTime[ id ] = 0;
         g_isBanningReason[ id ][ 0 ] = 0;
@@ -1009,7 +1047,7 @@ OpenMainMenu( id )
 
     new players[ 32 ], num;
     get_players( players, num );
-
+    clear_bit( bIsOffBan, id );
     new buff[ 2 ];
     for( new i; i < num; i++ )
     {
@@ -1040,8 +1078,7 @@ public MainMenuHandler( id, menuid, item )
     }
     else
         g_IsBanning[ id ] = 0;
-    
-    clear_bit( bIsOffBan, id );
+
     menu_destroy( menuid );
     return PLUGIN_HANDLED;
 }
@@ -1056,6 +1093,7 @@ public ReasonHandler( id, menuid, item )
         {
             menu_item_getinfo( menuid, item, _, _, _, g_isBanningReason[ id ], MAX_REASON_LENGTH - 1 );
             g_isBanningTime[ id ] = item - 1;
+            set_bit( bIsUsingBanReasonTime, id );
             clear_bit( bIsUsingCustomTime, id );
             ConfirmMenu( id );
         }
@@ -1063,6 +1101,7 @@ public ReasonHandler( id, menuid, item )
     else
     {
         clear_bit( bIsUsingCustomTime, id );
+        clear_bit( bIsUsingBanReasonTime, id );
         clear_bit( bIsOffBan, id );
         g_isBanningTime[ id ] = 0;
         g_IsBanning[ id ] = 0;
@@ -1105,13 +1144,19 @@ ConfirmMenu( id )
     new time; 
     if( check_bit( bIsUsingCustomTime, id ) )
         time = g_isBanningTime[ id ];
-    else
+    else if( check_bit( bIsUsingBanReasonTime, id ) )
         time = g_ReasonBanTimes[ g_isBanningTime[ id ] ];
+    else
+        time = iBanTimes[ g_isBanningTime[ id ] ];
 
     if( time == 0 )
         menu_additem( menuid, "\yBan Length: \wPermanent^n")
     else
-        menu_additem( menuid, fmt( "\yBan Length: \w%d^n", time ) );
+    {
+        new szTime[ 64 ];
+        get_time_length( 1, time, timeunit_minutes, szTime, charsmax( szTime ) );
+        menu_additem( menuid, fmt( "\yBan Length: \w%s^n", szTime ) );
+    }
 
     menu_additem( menuid, "\rConfirm" );
 
@@ -1140,15 +1185,18 @@ public ConfirmHandler( id, menuid, item )
                 new time;
                 if( check_bit( bIsUsingCustomTime, id ) )
                     time = g_isBanningTime[ id ];
-                else
+                else if( check_bit( bIsUsingBanReasonTime, id ) )
                     time = g_ReasonBanTimes[ g_isBanningTime[ id ] ];
-
+                else
+                    time = iBanTimes[ g_isBanningTime[ id ] ];
+                
                 if( check_bit( bIsOffBan, id ) )
                     BanPlayer( id, -(g_IsBanning[ id ] - 1), time, g_isBanningReason[ id ] );
                 else
-                    BanPlayer( id, g_IsBanning[ id ], time, g_isBanningReason[ id ] );  
+                    BanPlayer( id, find_player( "k", g_IsBanning[ id ] ), time, g_isBanningReason[ id ] );  
                 
                 clear_bit( bIsUsingCustomTime, id );
+                clear_bit( bIsUsingBanReasonTime, id );
                 clear_bit( bIsOffBan, id );
                 g_IsBanning[ id ] = 0;
                 g_isBanningTime[ id ] = 0;
@@ -1158,6 +1206,7 @@ public ConfirmHandler( id, menuid, item )
     }
     else
     {
+        clear_bit( bIsUsingBanReasonTime, id );
         clear_bit( bIsUsingCustomTime, id );
         clear_bit( bIsOffBan, id );
         g_IsBanning[ id ] = 0;
@@ -1173,6 +1222,7 @@ public CmdOffBanMenu( id, level, cid )
 {
     if( cmd_access( id, level, cid, 0 ) )
     {
+        clear_bit( bIsUsingBanReasonTime, id );
         clear_bit( bIsUsingCustomTime, id );
         clear_bit( bIsOffBan, id );
         g_IsBanning[ id ] = 0;
@@ -1219,6 +1269,7 @@ public CmdReason( id )
     read_args( g_isBanningReason[ id ], MAX_REASON_LENGTH - 1 );
     remove_quotes( g_isBanningReason[ id ] );
     trim( g_isBanningReason[ id ] );
+    clear_bit( bIsUsingBanReasonTime, id );
     if( !g_isBanningReason[ id ][ 0 ] )
         client_cmd( id, "messagemode _reason_" );
     else
@@ -1234,10 +1285,9 @@ public BanLengthHandler( id, menuid, item )
             client_cmd( id, "messagemode _ban_length_" );
         else
         {
-            new szLength[ 10 ]
-            menu_item_getinfo( menuid, item, _, _, _, szLength, charsmax( szLength ) );
-            set_bit( bIsUsingCustomTime, id );
-            g_isBanningTime[ id ] = str_to_num( szLength );
+            clear_bit( bIsUsingCustomTime, id );
+            clear_bit( bIsUsingBanReasonTime, id );
+            g_isBanningTime[ id ] = item - 1;
             ConfirmMenu( id );
         }
     }
