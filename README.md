@@ -18,7 +18,8 @@ Features:
  - addban's time can start from when the banned player joins the server.
  - offban's time can start from when the banned player joins the server.
  - has a screenshot system included that will take X numbered screenshots of the player before he gets kicked.
- - amx_rban to perform IP range bans.
+ - amx_rban to perform IP range bans. ( slightly hardcoded but works! )
+
 API:
  - forward to check whenever a player gets banned (before and after he gets banned): you can block a ban too or change ban's length.
  - forwards to check whenever a player gets banned through offban and addban.
