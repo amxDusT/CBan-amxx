@@ -6,6 +6,7 @@ Add this on the top on plugins.ini.
 
 If you're using AMXBans, consider checking the "master" branch. 
 If you want something that works separated from your default ban system, check the "default" branch.
+(the 'light' versions are not checked to be working. report in case)
 
 Features:
  - a better ban system ( doesn't only ban by steamid and/or IP ).
