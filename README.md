@@ -32,3 +32,4 @@ API:
 TO DO:
  - cvar for screenshots.
  - add some huds to screenshots.
+ - block possibility to ban players who are already banned in addban and offban
