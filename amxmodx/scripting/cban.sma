@@ -68,7 +68,8 @@ enum _:eUpdateBits
 enum _:eTasks ( +=1000 )
 {
     TASK_KICK = 231,
-    TASK_SHOW
+    TASK_SHOW,
+    TASK_DOUBLECHECK
 }
 
 enum _:eOffBanData
@@ -394,6 +395,9 @@ public client_disconnected( id )
         remove_task( id + TASK_KICK );
     if( task_exists( id + TASK_SHOW ) )
         remove_task( id + TASK_SHOW );
+    if( task_exists( id + TASK_DOUBLECHECK ) )
+        remove_task( id + TASK_DOUBLECHECK );
+        
     if( !g_PlayerCode[ id ][ 0 ] )
         return;
     new name[ MAX_NAME_LENGTH ];
@@ -439,10 +443,16 @@ public plugin_end()
 
 public SQL_CheckPlayer( id )
 {
+    new data[ 2 ];
+    if( id > 32 )
+    {
+        id -= TASK_DOUBLECHECK;
+        data[ 1 ] = 1;
+    }
+
     if( !is_user_connected( id ) )
         return;
 
-    new data[ 1 ];
     data[ 0 ] = id;
 
     SQL_ThreadQuery( hTuple, "SQL_CheckProtectorHandle", fmt( "SELECT `c_code` FROM `%s` WHERE `uid`=%d AND `server`='%s';", g_CheckTable, get_user_userid( id ), g_ServerIP ), data, sizeof data );
@@ -459,8 +469,15 @@ public SQL_CheckProtectorHandle( failState, Handle:query, error[], errNum, data[
 
     if( !SQL_NumResults( query ) )
     {
-        server_cmd( "kick #%d Cannot verify data.", get_user_userid( id ) );
-        log_to_file( "cban.log", "Cannot check %N", id );
+        if( data[ 1 ] )
+        {
+            server_cmd( "kick #%d Cannot verify data.", get_user_userid( id ) );
+            log_to_file( "cban.log", "Cannot check %N", id );
+        }
+        else    // check again for user's cookie if 1st try didn't work.
+        {
+            set_task( 3.5, "SQL_CheckPlayer", id + TASK_DOUBLECHECK );
+        }
     }
     else
     {
