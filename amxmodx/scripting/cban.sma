@@ -471,8 +471,8 @@ public SQL_CheckProtectorHandle( failState, Handle:query, error[], errNum, data[
         get_user_authid( id, authid, charsmax( authid ) );
         get_user_ip( id, ip, charsmax( ip ), 1 );
 
-        formatex( query, charsmax( query ), "SELECT * FROM `%s` WHERE (c_code='%s') OR (player_id='%s' AND ban_type LIKE '%%S%%') \
-                                            OR ( ( player_ip='%s' OR player_last_ip='%s') AND ban_type LIKE '%%I%%') AND expired=0;", g_BanTable, g_PlayerCode[ id ],
+        formatex( query, charsmax( query ), "SELECT * FROM `%s` WHERE ((c_code='%s') OR (player_id='%s' AND ban_type LIKE '%%S%%') \
+                                            OR ( ( player_ip='%s' OR player_last_ip='%s') AND ban_type LIKE '%%I%%')) AND expired=0;", g_BanTable, g_PlayerCode[ id ],
                                             authid, ip, ip );
 
         SQL_ThreadQuery( hTuple, "SQL_CheckBanHandle", query, data, dataSize );
@@ -506,14 +506,15 @@ public SQL_CheckBanHandle( failState, Handle:query, error[], errNum, data[], dat
         current_time = get_systime();
         update_ban = SQL_ReadResult( query, 17 );
 
-        if( update_ban > 0 && ( get_user_flags( id ) & ADMIN_FLAG_IMMUNITY ) )   // let's avoid random admins to ban immunity flag people through a "workaround"
+        // let's avoid random admins to ban immunity flag people through a "workaround"
+        if( update_ban > 0 && ( get_user_flags( id ) & ADMIN_FLAG_IMMUNITY ) )   
         {
             SQL_ThreadQuery( hTuple, "IgnoreHandle", fmt( "DELETE FROM `%s` WHERE `bid`=%d", g_BanTable, bid ) );
             SQL_NextRow( query )
             continue;
         }
 
-        if( ban_created + ban_length < current_time && ban_length && ( update_ban != 1 || !iAddBanType ) && ( update_ban != 2 || !iOffBanType ) )      // ban has expired. 
+        if( ban_created + (ban_length*60) < current_time && ban_length && ( update_ban != 1 || !iAddBanType ) && ( update_ban != 2 || !iOffBanType ) )      // ban has expired. 
         {
             // update expired to be 1, so next time it doesn't check it.
             SQL_ThreadQuery( hTuple, "IgnoreHandle", fmt( "UPDATE `%s` SET `expired`=1 WHERE `bid`=%d", g_BanTable, bid ) );
