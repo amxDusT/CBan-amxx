@@ -1,6 +1,8 @@
+# unmaintained
 # CBan-amxx
 
 A more efficient way to ban people.
+it bans through steamID, IP, cookies.
 # This version is meant to substitute the normal ban system. 
 Add this on the top on plugins.ini. 
 
